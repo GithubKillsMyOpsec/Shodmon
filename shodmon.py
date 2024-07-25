@@ -1,32 +1,26 @@
 #! /usr/bin/env python
 # coding=UTF-8
-# Shodan Monitoring Tool
+# Shodan Monitoring Tool V2
 # By NGrovyer
+# Revived by SierraUniformSierra
+# Discord code ripped from https://gist.github.com/Bilka2/5dd2ca2b6e9f3573e0c2defe5d3031b2
 
-SHODAN_API_KEY = "############" #Your Shodan Key
-shodan_query_expression='ASN:AS394161' #Your Shodan Query expression, Taking Tesla as Example
-smtp_username=fromaddr="senderemail@address.com"    #Your SMTP Username, also the From addresss in email
-smtp_password="SMTPPASSWORD"            #Your SMTP Password
-email_receivers=["receivers@email.com"      #Comma separated List of Receivers 
-                 ]
+url = "WEBHOOKURLHERE" # webhook url for discord
+SHODAN_API_KEY = "SHODANKEYHERE" #Your Shodan Key
+shodan_query_expression='ASN:11111' #Your Shodan Query expression
 
-import time
-import datetime
-from shodan import Shodan                       #pip install shodan
-from shodan import exception as Shodan_exception                       #pip install shodan
 import sys
-import sqlite3
-import json
-import dateutil.parser as dp
-import schedule                                 #pip install schedule
-from cStringIO import StringIO
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.header import Header
-from email import Charset
-from email.generator import Generator
-import smtplib
 import ast
+import json
+import time
+import sqlite3
+import schedule                                 #pip install schedule
+import requests 
+import datetime
+from io import StringIO
+from shodan import Shodan                       #pip install shodan
+import dateutil.parser as dp
+from shodan import exception as Shodan_exception
 
 conn = sqlite3.connect('shodan_db.sqlite')
 
@@ -35,7 +29,7 @@ api = Shodan(SHODAN_API_KEY)
 
 #Queries Shodan for a search term and then stores results in a list of dictionaries
 def query_Shodan(term, callback):
-    print "Runing Shodan Query"
+    print("Runing Shodan Query")
     templist = []
     previous_ip=""
     while True:
@@ -60,14 +54,13 @@ def query_Shodan(term, callback):
                 #Fetch details of each  of IP one by one
                 try:
                     host = api.host('%s' %result['ip'])
-                except Shodan_exception.APIError, e:
+                except Shodan_exception.APIError as e:
                     #No results found, print no 'matches'
                     
-                    print "No "+result['ip_str']+' %s\r' %e
+                    print("No "+result['ip_str']+' %s\r' %e)
                     continue
                 
                 ip = '%s' %host.get('ip_str', None)
-                
                 #IP Stored as string
                 temp["IP"] = ip.encode('ascii', 'replace')
                 
@@ -90,8 +83,13 @@ def query_Shodan(term, callback):
                 #Empty dictionary for
                 port_dict=dict()
                 
+                # Ensure temp["Ports"] is a string
+                ports = temp["Ports"]
+                if isinstance(ports, bytes):
+                    ports = ports.decode('utf-8')
+
                 #Convert Ports to array list
-                port_list=temp["Ports"].strip("[").strip("]").split(",")
+                port_list=ports.strip("[").strip("]").split(",")
                                 
                 #Get hash data from data row
                 hash_data = host.get('data')
@@ -101,20 +99,18 @@ def query_Shodan(term, callback):
                 for portname in port_list:
                     port_dict[hash_data[i]['port']]=str(hash_data[i]['hash'])
                     i=i+1
-
                 #Convert that dictonary into string for processing in next function
                 temp["hash_data"] = str(port_dict)
-
                 #Create mega list consisting of each of nested list
                 templist.append(temp)
                 callback(temp)
             break
-        except Exception, e:
+        except Exception as e:
             #No results found, print no 'matches'
-            print '%s\r' %e
+            print("Exception!")
+            print('%s\r' %e)
             
     #Returns a list of dictionary objects. Each dictionary is a result
-    print "Reached Return"
     return templist
 
 count_var=0
@@ -129,7 +125,7 @@ def run_shodan_query():
     is_changed=False
     message_body=""     #Variable which will create mail body of your email
     list = query_Shodan(shodan_query_expression,print_result) #This is main query, could be done on basis of ASN or anything else, based on shodan format
-    print "Processing"
+    print("Processing")
 
     list_length=len(list)   #Number of results fetched from shodan
 
@@ -138,8 +134,8 @@ def run_shodan_query():
     old_ip_address = select_rec.fetchall()
 
     #How many IPs we saw last time, and how many are there now
-    message_body=message_body+"Total IPs Yesterday" + str(len(old_ip_address))+"<br>\r\n"   
-    message_body=message_body+"Total IPs Today"+ str(list_length)+"<br>\r\n"
+    message_body=message_body+"Total IPs Yesterday" + str(len(old_ip_address))+"\r\n"   
+    message_body=message_body+"Total IPs Today"+ str(list_length)+"\r\n"
 
     #Now begins the loop of checking whether any IP is gone from shodan or what?
     for x in old_ip_address:
@@ -156,7 +152,7 @@ def run_shodan_query():
             else:  
                 last_scan_date=datetime.datetime.utcfromtimestamp(int(get_last_date[0][2])).strftime('%d-%m-%Y')
             is_changed=True
-            message_body=message_body+"Old IP: "+x[1]+" ("+know_ip_dns_mapping.get(x[1],"")+") ::"+x[2]+" is not found today, last appeared on: "+str(last_scan_date)+"<br>\r\n"
+            message_body=message_body+"Old IP: "+x[1]+" ("+know_ip_dns_mapping.get(x[1],"")+") ::"+x[2]+" is not found today, last appeared on: "+str(last_scan_date)+"\r\n"
 
     #Now 2nd loop is to check whether a new IP had popped up in Shodan (or what)
     for y in list:
@@ -166,27 +162,41 @@ def run_shodan_query():
                 is_found=True
                 break
         if is_found==False:
-            select_rec = conn.execute("SELECT sno,ip_address,unix_scan_timestamp FROM shodan_db where ip_address='"+y['IP']+"' order by sno DESC limit 0,1")
+            # Ensure y['IP'] is a string
+            ip_address = y['IP']
+            if isinstance(ip_address, bytes):
+                ip_address = ip_address.decode('utf-8')
+
+            # Construct the SQL query
+            query = f"SELECT sno, ip_address, unix_scan_timestamp FROM shodan_db WHERE ip_address='{ip_address}' ORDER BY sno DESC LIMIT 0,1"
+            select_rec = conn.execute(query)
+
             get_last_date=select_rec.fetchall()
             if len(get_last_date)==0:
                 last_scan_date="NONE"
             else:            
                 last_scan_date=datetime.datetime.utcfromtimestamp(int(get_last_date[0][2])).strftime('%d-%m-%Y')
             is_changed=True
-            message_body=message_body+"New IP: "+y['IP']+" ("+know_ip_dns_mapping.get(y['IP'],"<b><u>BLANK</u></b>")+") ::"+y['Ports']+" is found today, last appeared on: "+str(last_scan_date)+"<br>\r\n"
+
+            ports = y['Ports']
+            if isinstance(ports, bytes):
+                ports = ports.decode('utf-8')
+
+            message_body=message_body+"New IP: "+ip_address+" ("+know_ip_dns_mapping.get(ip_address,"")+") ::"+ports+" is found today, last appeared on: "+str(last_scan_date)+"\r\n"
 
     #Update all past_exist to 1 as we are getting new records
     conn.execute("update shodan_db set past_exist=1")
     
     #Start processing each item in the live list        
     for match in list:
-        ip_address=match['IP']
+        #Screwit, we will just apply decode utf right here.
+        ip_address=match['IP'].decode('utf-8')
         last_update=match['last_update']
         hostnames=match['Hostnames']
         hash_data=match['hash_data']
         query_term=match['Query']
         asn_num=match['ASN']
-        ports=match['Ports']
+        ports=match['Ports'].decode('utf-8')
         
         parsed_t = dp.parse(last_update)
         parsed_date = parsed_t.strftime('%Y-%m-%d')
@@ -218,16 +228,16 @@ def run_shodan_query():
                     #below statement means, if key not in dictionary, for some reason below is true
                     if str(key) in db_hash_dict:
                         is_changed=True
-                        message_body=message_body+"New Port Found: "+ip_address+" ("+know_ip_dns_mapping.get(ip_address,"<b><u>BLANK</u></b>")+") "+" | Old:"+str(db_hash_dict) +" AND New: "+str(hash_live_dict) +"<br>\r\n"
+                        message_body=message_body+"New Port Found: "+ip_address+" ("+know_ip_dns_mapping.get(ip_address,"")+") "+" | Old:"+str(db_hash_dict) +" AND New: "+str(hash_live_dict) +"\r\n"
                         
                     #If key already exist, check if Hash is same, if hash not equal, something changed, and we need to check
                     else:   
                         if hash_live_dict[key]!=db_hash_dict[key]:
                             is_changed=True
-                            message_body=message_body+"HASH CHANGED: "+ip_address+" ("+know_ip_dns_mapping.get(ip_address,"<b><u>BLANK</u></b>")+") "+" | Old:"+str(key)+" --> "+ str(db_hash_dict[key]) +" AND New: "+str(key)+" --> "+ str(hash_live_dict[key]) +"<br>\r\n"
+                            message_body=message_body+"HASH CHANGED: "+ip_address+" ("+know_ip_dns_mapping.get(ip_address,"")+") "+" | Old:"+str(key)+" --> "+ str(db_hash_dict[key]) +" AND New: "+str(key)+" --> "+ str(hash_live_dict[key]) +"\r\n"
             else:
                 is_changed=True
-                message_body=message_body+"HASH & PORTS CHANGED: "+ip_address+" ("+know_ip_dns_mapping.get(ip_address,"<b><u>BLANK</u></b>")+") "+" | Old:"+ str(db_hash_dict) +" AND New:"+ str(hash_live_dict) +"<br>\r\n"
+                message_body=message_body+"HASH & PORTS CHANGED: "+ip_address+" ("+know_ip_dns_mapping.get(ip_address,"")+") "+" | Old:"+ str(db_hash_dict) +" AND New:"+ str(hash_live_dict) +"\r\n"
                 
 	    #Breaking Port string into a list
             db_ports_list=q[0][2].strip("[").strip("]").split(",")
@@ -243,12 +253,12 @@ def run_shodan_query():
                 for port_check in ports_list:
                     if port_check not in db_ports_list:
                         is_changed=True
-                        message_body=message_body+"PORT CHANGED: "+ip_address+" ("+know_ip_dns_mapping.get(ip_address,"<b><u>BLANK</u></b>")+") "+" | Old:"+ str(db_ports_list) +" AND New:"+ str(ports_list) +"<br>\r\n"
+                        message_body=message_body+"PORT CHANGED: "+ip_address+" ("+know_ip_dns_mapping.get(ip_address,"")+") "+" | Old:"+ str(db_ports_list) +" AND New:"+ str(ports_list) +"\r\n"
 
             #If number of ports before and after are not equal, thats definitely a port change!                        
             else:
                 is_changed=True
-                message_body=message_body+"PORT CHANGED: "+ip_address+" ("+know_ip_dns_mapping.get(ip_address,"<b><u>BLANK</u></b>")+") "+" | Old:"+ str(db_ports_list) +" AND New:"+ str(ports_list) +"<br>\r\n"
+                message_body=message_body+"PORT CHANGED: "+ip_address+" ("+know_ip_dns_mapping.get(ip_address,"")+") "+" | Old:"+ str(db_ports_list) +" AND New:"+ str(ports_list) +"\r\n"
 
         else:
 	    #if net new IP, append to changes along with comparision
@@ -259,84 +269,59 @@ def run_shodan_query():
 
     conn.commit()
     #conn.close()
-    message_starter="Total IP Scanned: "+ str(list_length)+" <br>\r\n"
+    message_starter="***Total IP Scanned: "+ str(list_length)+"*** \r\n"
 
     #If anywhere the change flag is raised
     if is_changed:
-        subject="[Changes]Shodan Monitoring"
+        subject="[Changes]Shodan-Monitoring"
     else:
         subject="[No Change]Shodan Monitoring"
 
     #This part of mail body is for record keeping in our mailbox, rather than looking in your Sqlite DB, you can quickly use your mailbox to pin point first appearance of IP
-    message_body=message_body+"<br><br><br>Total IPs found today<br>\r\n"
+    message_body=message_body+"\n***Total IPs found today***\r\n"
     for match in list:
-        message_body=message_body+match['IP']+" ("+know_ip_dns_mapping.get(match['IP'],"<b><u>BLANK</u></b>")+") "+" - Ports - "+match['Ports']+"<br>\r\n"
+        message_body=message_body+match['IP'].decode('utf-8')+" ("+know_ip_dns_mapping.get(match['IP'].decode('utf-8'),"")+") "+" - Ports - "+match['Ports'].decode('utf-8')+"\r\n"
 
-    print "finished"
+    print("finished")
 
     #If you want to see how our mail body will look like, uncomment below line
-    #print message_starter+message_body
+    print (message_starter+message_body)
 
     #Processing finished, lets mail it!
-    mail_status=send_mail(message_starter+message_body,subject)
-            
+    #mail_status=send_mail(message_starter+message_body,subject)
+    message_body = "*Unless otherwise specified, dates are formatted as DD-MM-YYYY*\n\n"+message_body
+    send_discord(message_body,subject)
+
+
+
+
+def send_discord(msg_to_send,Subject):
+    # for all params, see https://discordapp.com/developers/docs/resources/webhook#execute-webhook
+
+
+    # leave this out if you dont want an embed
+    # for all params, see https://discordapp.com/developers/docs/resources/channel#embed-object
+
+    data = {
+        "content" : "DATA",
+        "username" : "Shodan Monitor"
+    }
+    data["embeds"] = [
+        {
+            "description" : msg_to_send,
+            "title" : Subject
+        }
+    ]
+    result = requests.post(url, json = data)
+
+    try:
+        result.raise_for_status()
+    except requests.exceptions.HTTPError as err:
+        print(err)
+    else:
+        print(f"Message delivered successfully, code {result.status_code}.")
 	
-#Mailer
-def send_mail(msg_body,subject):
-    global smtp_password, smtp_username,email_receivers
-    # Addresses to Send on
-    print "Drafing Mail body"
-    
-    #Mail Body starts
-    text_body = ""
 
-    top_heading = "<b>Summary is as below:</b><br/>"
-    text_body = msg_body                      #Returned from Processing Stage
-    text_body = top_heading + text_body
-
-    # Default encoding mode set to Quoted Printable. Acts globally!
-    Charset.add_charset('utf-8', Charset.QP, Charset.QP, 'utf-8')
-
-    # 'alternative’ MIME type – HTML and plain text bundled in one e-mail message
-    msg = MIMEMultipart('alternative')
-
-    msg['Subject']=subject
-    # Only descriptive part of recipient and sender shall be encoded, not the email address
-    msg['From'] = fromaddr
-    msg['To'] = toaddr
-    
-    # Attach both parts
-    text_body = MIMEText(text_body, 'html', 'UTF-8')
-    msg.attach(text_body)
-
-    # Create a generator and flatten message object to 'file’
-    str_io = StringIO()
-    g = Generator(str_io, False)
-    g.flatten(msg)
-    # str_io.getvalue() contains ready to sent message
-    
-    # Optionally - send it – using python's smtplib
-    s = smtplib.SMTP('smtp.gmail.com', 587)
-    s.ehlo()
-    s.starttls()
-
-    #This is incase gmail connectivity dont happen at once.
-    while True:
-        try:
-            s.login(smtp_username, smtp_password)           #Log into SMTP Server
-            for toaddr in email_receivers:                  #Loop to go through entire receiver list and send them mail one by one.
-                s.sendmail(fromaddr, toaddr, str_io.getvalue())
-            break
-        except Exception as x:
-            print x
-
-    s.quit()
-
-    #Print when the last mail was sent, for debug purpose or to check who failed? the script or the mail ?
-    ts = time.time()
-    st = datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
-    print "Mail Sent @ "+str(st)
-    print "\n\n"
 
 #The below is dictionary mapping, for known exposed servers and their domain names (or whatever that can make you understand IP)
 #If something unknown Pop up, that either needs to be mapped, or needs to be investigated
@@ -359,3 +344,4 @@ schedule.every().day.at("10:30").do(run_shodan_query)
 while True:
     schedule.run_pending()
     time.sleep(1)
+    
