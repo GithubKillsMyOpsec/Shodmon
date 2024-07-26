@@ -1,12 +1,10 @@
 #! /usr/bin/env python
-# coding=UTF-8
-# Shodan Monitoring Tool V2
-# By NGrovyer
-# Revived by SierraUniformSierra
-# Discord code ripped from https://gist.github.com/Bilka2/5dd2ca2b6e9f3573e0c2defe5d3031b2
+#coding=UTF-8
+#Shodan Monitoring Tool V2
+#By NGrovyer and SierraUniformSierra
 
-url = "WEBHOOKURLHERE" # webhook url for discord
-SHODAN_API_KEY = "SHODANKEYHERE" #Your Shodan Key
+url = "DISCORDWEHOOKURLHERE" #webhook url for discord
+SHODAN_API_KEY = "APIKEYHERE" #Your Shodan Key
 shodan_query_expression='ASN:11111' #Your Shodan Query expression
 
 import sys
@@ -24,7 +22,7 @@ from shodan import exception as Shodan_exception
 
 conn = sqlite3.connect('shodan_db.sqlite')
 
-# Create a connection to the Shodan API
+#Create a connection to the Shodan API
 api = Shodan(SHODAN_API_KEY)
 
 #Queries Shodan for a search term and then stores results in a list of dictionaries
@@ -82,8 +80,8 @@ def query_Shodan(term, callback):
                 
                 #Empty dictionary for
                 port_dict=dict()
-                
-                # Ensure temp["Ports"] is a string
+
+                #Ensure temp["Ports"] is a string
                 ports = temp["Ports"]
                 if isinstance(ports, bytes):
                     ports = ports.decode('utf-8')
@@ -162,12 +160,12 @@ def run_shodan_query():
                 is_found=True
                 break
         if is_found==False:
-            # Ensure y['IP'] is a string
+            #Ensure y['IP'] is a string
             ip_address = y['IP']
             if isinstance(ip_address, bytes):
                 ip_address = ip_address.decode('utf-8')
 
-            # Construct the SQL query
+            #Construct the SQL query
             query = f"SELECT sno, ip_address, unix_scan_timestamp FROM shodan_db WHERE ip_address='{ip_address}' ORDER BY sno DESC LIMIT 0,1"
             select_rec = conn.execute(query)
 
@@ -189,7 +187,6 @@ def run_shodan_query():
     
     #Start processing each item in the live list        
     for match in list:
-        #Screwit, we will just apply decode utf right here.
         ip_address=match['IP'].decode('utf-8')
         last_update=match['last_update']
         hostnames=match['Hostnames']
@@ -273,14 +270,14 @@ def run_shodan_query():
 
     #If anywhere the change flag is raised
     if is_changed:
-        subject="[Changes]Shodan-Monitoring"
+        subject="[Changes]RKeins-Shodan-Monitoring"
     else:
-        subject="[No Change]Shodan Monitoring"
+        subject="[No Change]Rkeins-Shodan Monitoring"
 
     #This part of mail body is for record keeping in our mailbox, rather than looking in your Sqlite DB, you can quickly use your mailbox to pin point first appearance of IP
-    message_body=message_body+"\n***Total IPs found today***\r\n"
+    message2="\n***Total IPs found today***\r\n"
     for match in list:
-        message_body=message_body+match['IP'].decode('utf-8')+" ("+know_ip_dns_mapping.get(match['IP'].decode('utf-8'),"")+") "+" - Ports - "+match['Ports'].decode('utf-8')+"\r\n"
+        message2=message2+match['IP'].decode('utf-8')+" ("+know_ip_dns_mapping.get(match['IP'].decode('utf-8'),"")+") "+" - Ports - "+match['Ports'].decode('utf-8')+"\r\n"
 
     print("finished")
 
@@ -291,41 +288,67 @@ def run_shodan_query():
     #mail_status=send_mail(message_starter+message_body,subject)
     message_body = "*Unless otherwise specified, dates are formatted as DD-MM-YYYY*\n\n"+message_body
     send_discord(message_body,subject)
+    send_discord(message2,message_starter)
 
+def send_discord(msg_to_send, Subject):
+    def chunk_message(message, limit=2000):
+        """Splits the message into chunks of specified limit, breaking at the nearest line break."""
+        lines = message.split('\n')
+        chunk = ""
+        for line in lines:
+            if len(chunk) + len(line) + 1 > limit:  # +1 for the newline character
+                yield chunk
+                chunk = line
+            else:
+                if chunk:
+                    chunk += '\n' + line
+                else:
+                    chunk = line
+        if chunk:
+            yield chunk
 
+    def post_to_discord(data, url, max_retries=5, max_initial_wait=10):
+        """Posts data to Discord with rate limit handling."""
+        retry_count = 0
+        while retry_count < max_retries:
+            result = requests.post(url, json=data)
+            if result.status_code == 429:  # Rate limit error
+                retry_after = int(result.headers.get('Retry-After', 1))
+                if retry_count == 0:
+                    retry_after = min(retry_after, max_initial_wait)
+                print(f"Rate limited. Retrying after {retry_after} seconds.")
+                time.sleep(retry_after)
+                retry_count += 1
+            else:
+                try:
+                    result.raise_for_status()
+                except requests.exceptions.HTTPError as err:
+                    print(err)
+                else:
+                    print(f"Payload delivered successfully, code {result.status_code}.")
+                return
+        print("Failed to deliver payload after multiple retries.")
 
+    # Ensure the total message length is split into chunks if needed
+    chunks = list(chunk_message(msg_to_send))
 
-def send_discord(msg_to_send,Subject):
-    # for all params, see https://discordapp.com/developers/docs/resources/webhook#execute-webhook
-
-
-    # leave this out if you dont want an embed
-    # for all params, see https://discordapp.com/developers/docs/resources/channel#embed-object
-
-    data = {
-        "content" : "DATA",
-        "username" : "Shodan Monitor"
-    }
-    data["embeds"] = [
-        {
-            "description" : msg_to_send,
-            "title" : Subject
+    for i, chunk in enumerate(chunks):
+        data = {
+            "content": "",
+            "username": "Some-Netmon",
+            "embeds": [
+                {
+                    "description": chunk,
+                    "title": Subject if i == 0 else ""
+                }
+            ]
         }
-    ]
-    result = requests.post(url, json = data)
+        post_to_discord(data, url)
 
-    try:
-        result.raise_for_status()
-    except requests.exceptions.HTTPError as err:
-        print(err)
-    else:
-        print(f"Message delivered successfully, code {result.status_code}.")
-	
 
 
 #The below is dictionary mapping, for known exposed servers and their domain names (or whatever that can make you understand IP)
 #If something unknown Pop up, that either needs to be mapped, or needs to be investigated
-#
 know_ip_dns_mapping={
   "209.133.79.64": "SSO Tesla",       #This is Just an Example
 
@@ -344,4 +367,4 @@ schedule.every().day.at("10:30").do(run_shodan_query)
 while True:
     schedule.run_pending()
     time.sleep(1)
-    
+
